@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"backend/database"
 	"backend/handlers"
@@ -18,14 +16,23 @@ import (
 	"github.com/go-chi/chi/v5"
 	chi_middleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	socketio "github.com/doquangtan/socketio/v4"
 	"github.com/golang-jwt/jwt/v5"
+	socketio "github.com/googollee/go-socket.io"
 )
 
 // App struct represents the application
 type App struct {
-	Router        *chi.Mux
+	Router         *chi.Mux
 	SocketIOServer *socketio.Server
+}
+
+// socketIOServerAdapter adapts *socketio.Server to handlers.SocketIORoomBroadcaster
+type socketIOServerAdapter struct {
+	srv *socketio.Server
+}
+
+func (ad *socketIOServerAdapter) BroadcastToRoom(room string, event string, v interface{}) {
+	ad.srv.BroadcastToRoom("/", room, event, v)
 }
 
 // Initialize initializes the application
@@ -57,18 +64,14 @@ func (a *App) initializeMiddleware() {
 }
 
 func (a *App) initializeSocketIO() {
-	var err error
 	a.SocketIOServer = socketio.NewServer(nil)
-	if err != nil {
-		log.Fatalf("Failed to create Socket.IO server: %v", err)
-	}
 
-	a.SocketIOServer.OnConnect(func(s socketio.Socket) error {
+	a.SocketIOServer.OnConnect("/", func(s socketio.Conn) error {
 		log.Println("Socket.IO connected:", s.ID())
 		return nil
 	})
 
-	a.SocketIOServer.OnEvent("auth", func(s socketio.Socket, tokenString string) {
+	a.SocketIOServer.OnEvent("/", "auth", func(s socketio.Conn, tokenString string) {
 		claims := &handlers.Claims{}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 			return handlers.GetJWTKey(), nil
@@ -76,24 +79,26 @@ func (a *App) initializeSocketIO() {
 
 		if err != nil || !token.Valid {
 			s.Emit("authError", "Invalid token")
-			s.Disconnect()
+			// close the connection for invalid auth
+			_ = s.Close()
 			return
 		}
 
 		var user models.User
 		if result := database.DB.Where("email = ?", claims.Email).First(&user); result.Error != nil {
 			s.Emit("authError", "User not found")
-			s.Disconnect()
+			_ = s.Close()
 			return
 		}
 
-		s.SetContext(context.WithValue(s.Context(), "userID", user.ID))
+		// store the user id directly in the socket's context
+		s.SetContext(user.ID)
 		s.Emit("authenticated", user.ID)
 		log.Printf("Socket %s authenticated for user %d\n", s.ID(), user.ID)
 	})
 
-	a.SocketIOServer.OnEvent("joinChat", func(s socketio.Socket, chatIDStr string) {
-		userID, ok := s.Context().Value("userID").(uint)
+	a.SocketIOServer.OnEvent("/", "joinChat", func(s socketio.Conn, chatIDStr string) {
+		userID, ok := s.Context().(uint)
 		if !ok {
 			s.Emit("error", "Unauthorized")
 			return
@@ -116,8 +121,8 @@ func (a *App) initializeSocketIO() {
 		s.Emit("joinedChat", chatID)
 	})
 
-	a.SocketIOServer.OnEvent("leaveChat", func(s socketio.Socket, chatIDStr string) {
-		userID, ok := s.Context().Value("userID").(uint)
+	a.SocketIOServer.OnEvent("/", "leaveChat", func(s socketio.Conn, chatIDStr string) {
+		userID, ok := s.Context().(uint)
 		if !ok {
 			s.Emit("error", "Unauthorized")
 			return
@@ -132,11 +137,11 @@ func (a *App) initializeSocketIO() {
 		s.Emit("leftChat", chatID)
 	})
 
-	a.SocketIOServer.OnDisconnect(func(s socketio.Socket, reason string) {
+	a.SocketIOServer.OnDisconnect("/", func(s socketio.Conn, reason string) {
 		log.Println("Socket.IO disconnected:", s.ID(), "Reason:", reason)
 	})
 
-	a.SocketIOServer.OnError(func(s socketio.Socket, err error) {
+	a.SocketIOServer.OnError("/", func(s socketio.Conn, err error) {
 		log.Println("Socket.IO error:", err)
 	})
 
@@ -145,6 +150,8 @@ func (a *App) initializeSocketIO() {
 			log.Fatalf("Socket.IO server error: %v", err)
 		}
 	}()
+
+	// adapter instance will be created when wiring routes
 }
 
 func (a *App) initializeRoutes() {
@@ -160,8 +167,10 @@ func (a *App) initializeRoutes() {
 	// Protected routes
 	a.Router.Group(func(r chi.Router) {
 		r.Use(middleware.AuthMiddleware)
-		routes.ChatRoutes(r, a.SocketIOServer)
-		routes.LLMRoutes(r, a.SocketIOServer)
+		// Wrap server with adapter to match handlers.SocketIORoomBroadcaster
+		adapter := &socketIOServerAdapter{srv: a.SocketIOServer}
+		routes.ChatRoutes(r, adapter)
+		routes.LLMRoutes(r, adapter)
 		routes.FileRoutes(r)
 		routes.KnowledgeRoutes(r)
 		routes.ModelRoutes(r)
@@ -195,4 +204,3 @@ func main() {
 	log.Println("Starting backend server on :8080")
 	app.Run(":8080")
 }
-
