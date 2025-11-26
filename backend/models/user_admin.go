@@ -1,9 +1,5 @@
 package models
 
-import (
-	"time"
-)
-
 // UserUpdateForm for updating a user's profile
 type UserUpdateForm struct {
 	Name            string `json:"name"`

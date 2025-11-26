@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -10,27 +11,27 @@ import (
 	"backend/models"
 	"backend/services"
 	"backend/utils"
-
-	"github.com/go-chi/chi/v5"
-	socketio "github.com/doquangtan/socketio/v4"
 )
 
+type SocketIORoomBroadcaster interface {
+	BroadcastToRoom(room string, event string, v interface{})
+}
+
 type LLMHandler struct {
-	SocketIOServer *socketio.Server
+	SocketIOServer SocketIORoomBroadcaster
 }
 
 func (h *LLMHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value("userID").(uint)
-	if !ok {
+	if _, ok := r.Context().Value("userID").(uint); !ok {
 		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
 		return
 	}
 
 	var request struct {
-		Model    string          `json:"model"`
+		Model    string           `json:"model"`
 		Messages []models.Message `json:"messages"`
-		Stream   bool            `json:"stream"`
-		ChatID   uint            `json:"chat_id"` // Added for continuity with chat history
+		Stream   bool             `json:"stream"`
+		ChatID   uint             `json:"chat_id"` // Added for continuity with chat history
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -116,11 +117,4 @@ func (h *LLMHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unsupported LLM model", http.StatusBadRequest)
 		return
 	}
-
-	// For streaming responses, the connection needs to be hijacked and data sent in chunks.
-	// This implementation currently only supports non-streaming responses.
-	// To implement streaming, you would need to: 
-	// 1. Set appropriate headers (Content-Type: text/event-stream)
-	// 2. Flush the response writer after each chunk
-	// 3. Handle the streaming response from the LLM service accordingly
 }

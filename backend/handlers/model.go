@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"backend/database"
@@ -22,18 +20,18 @@ func GetModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var models []models.Model
+	var dbModels []models.Model
 	query := database.DB.Where("user_id = ?", userID)
 
 	// TODO: Implement filtering, sorting, and pagination as per python/backend/open_webui/routers/models.py
 
-	if result := query.Find(&models); result.Error != nil {
+	if result := query.Find(&dbModels); result.Error != nil {
 		utils.RespondWithJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve models"})
 		return
 	}
 
 	var modelResponses []models.ModelResponse
-	for _, m := range models {
+	for _, m := range dbModels {
 		modelResponses = append(modelResponses, models.ModelResponse{
 			ID:          m.ID,
 			Name:        m.Name,
@@ -80,14 +78,14 @@ func CreateModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	model := models.Model{
-		ID:          form.ID,
-		UserID:      userID,
-		Name:        form.Name,
-		BaseModelID: form.BaseModelID,
-		Meta:        form.Meta,
-		Params:      form.Params,
+		ID:            form.ID,
+		UserID:        userID,
+		Name:          form.Name,
+		BaseModelID:   form.BaseModelID,
+		Meta:          form.Meta,
+		Params:        form.Params,
 		AccessControl: form.AccessControl,
-		IsActive:    form.IsActive,
+		IsActive:      form.IsActive,
 	}
 
 	if result := database.DB.Create(&model); result.Error != nil {

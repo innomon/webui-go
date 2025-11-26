@@ -2,12 +2,12 @@ package routes
 
 import (
 	"backend/handlers"
+
 	"github.com/go-chi/chi/v5"
-	socketio "github.com/doquangtan/socketio/v4"
 )
 
 // ChatRoutes defines the routes for chat functionality
-func ChatRoutes(r chi.Router, srv *socketio.Server) {
+func ChatRoutes(r chi.Router, srv handlers.SocketIORoomBroadcaster) {
 	h := &handlers.Handler{SocketIOServer: srv}
 
 	r.Post("/api/chats", h.CreateChat)

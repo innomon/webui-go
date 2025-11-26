@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 
 	"backend/database"
@@ -13,7 +14,6 @@ import (
 	"backend/utils"
 
 	"github.com/go-chi/chi/v5"
-	socketio "github.com/doquangtan/socketio/v4"
 )
 
 // A dummy http.ResponseWriter to satisfy the interface for internal calls
@@ -24,8 +24,13 @@ func (d *dummyResponseWriter) Write([]byte) (int, error)  { return 0, nil }
 func (d *dummyResponseWriter) WriteHeader(statusCode int) {}
 
 // Handler struct holds common dependencies for handlers
+// Handler struct holds common dependencies for handlers
+type SocketIOServer interface {
+	BroadcastToRoom(room string, event string, args interface{})
+}
+
 type Handler struct {
-	SocketIOServer *socketio.Server
+	SocketIOServer SocketIOServer
 }
 
 func (h *Handler) CreateChat(w http.ResponseWriter, r *http.Request) {
@@ -139,10 +144,10 @@ func (h *Handler) CreateChatMessage(w http.ResponseWriter, r *http.Request) {
 	database.DB.Where("chat_id = ?", chatID).Order("created_at asc").Find(&allMessages)
 
 	llmRequest := struct {
-		Model    string          `json:"model"`
+		Model    string           `json:"model"`
 		Messages []models.Message `json:"messages"`
-		Stream   bool            `json:"stream"`
-		ChatID   uint            `json:"chat_id"`
+		Stream   bool             `json:"stream"`
+		ChatID   uint             `json:"chat_id"`
 	}{
 		Model:    "ollama/llama3", // Defaulting to an Ollama model for now
 		Messages: allMessages,
@@ -157,7 +162,7 @@ func (h *Handler) CreateChatMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create a new HTTP request to the LLM completions endpoint
-	req, err = http.NewRequest("POST", "/api/chat/completions", bytes.NewBuffer(requestBody))
+	req, err := http.NewRequest("POST", "/api/chat/completions", bytes.NewBuffer(requestBody))
 	if err != nil {
 		log.Printf("Error creating LLM request: %v", err)
 		return
@@ -166,9 +171,12 @@ func (h *Handler) CreateChatMessage(w http.ResponseWriter, r *http.Request) {
 	// Set context with userID for authentication in the LLM handler
 	req = req.WithContext(r.Context())
 
+	// Create a new ResponseRecorder to capture the LLM handler's response
+	rr := httptest.NewRecorder()
+
 	// Create an LLMHandler instance and call its ChatCompletions method
 	llmHandler := LLMHandler{SocketIOServer: h.SocketIOServer}
-	llmHandler.ChatCompletions(&dummyResponseWriter{}, req)
+	llmHandler.ChatCompletions(rr, req)
 
 	// The LLM handler will save the message and broadcast it via Socket.IO
 }
