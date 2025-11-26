@@ -1,20 +1,29 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
+
+	"backend/database"
+	"backend/handlers"
+	"backend/middleware"
+	"backend/utils"
+
+	"github.com/go-chi/chi/v5"
+	chi_middleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 )
 
 // App struct represents the application
 type App struct {
-	Router *http.ServeMux
+	Router *chi.Mux
 }
 
 // Initialize initializes the application
 func (a *App) Initialize() {
-	a.Router = http.NewServeMux()
+	database.ConnectDB()
+	a.Router = chi.NewRouter()
+	a.initializeMiddleware()
 	a.initializeRoutes()
 }
 
@@ -23,118 +32,54 @@ func (a *App) Run(addr string) {
 	log.Fatal(http.ListenAndServe(addr, a.Router))
 }
 
-func (a *App) initializeRoutes() {
-	// Auth routes
-	a.Router.HandleFunc("/api/auth/login", a.login)
-	a.Router.HandleFunc("/api/auth/register", a.register)
+func (a *App) initializeMiddleware() {
+	a.Router.Use(chi_middleware.Logger)
+	a.Router.Use(chi_middleware.Recoverer)
+	a.Router.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+}
 
-	// Chat routes
-	a.Router.HandleFunc("/api/chats", a.chatsHandler)
-	a.Router.HandleFunc("/api/chats/", a.chatHandler) // Note the trailing slash
+func (a *App) initializeRoutes() {
+	a.Router.Get("/health", a.healthCheck)
+
+	// Auth routes
+	a.Router.Post("/api/auth/login", handlers.Login)
+	a.Router.Post("/api/auth/register", handlers.Register)
+
+	// Protected routes
+	a.Router.Group(func(r chi.Router) {
+		r.Use(middleware.AuthMiddleware)
+
+		// Chat routes
+		r.Post("/api/chats", handlers.CreateChat)
+		r.Get("/api/chats", handlers.GetChats)
+		r.Get("/api/chats/{id}/messages", handlers.GetChatMessages)
+		r.Post("/api/chats/{id}/messages", handlers.CreateChatMessage)
+	})
 }
 
 // handlers
 
-func (a *App) login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	respondWithJSON(w, http.StatusOK, map[string]string{"status": "logged in"})
-}
-
-func (a *App) register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	respondWithJSON(w, http.StatusCreated, map[string]string{"status": "registered"})
-}
-
-func (a *App) chatsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/api/chats" {
-		http.NotFound(w, r)
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		a.getChats(w, r)
-	case http.MethodPost:
-		a.createChat(w, r)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (a *App) chatHandler(w http.ResponseWriter, r *http.Request) {
-	// This will handle /api/chats/{id} and /api/chats/{id}/messages
-	path := strings.TrimPrefix(r.URL.Path, "/api/chats/")
-	parts := strings.Split(path, "/")
-
-	if len(parts) == 0 || parts[0] == "" {
-		http.NotFound(w, r)
+func (a *App) healthCheck(w http.ResponseWriter, r *http.Request) {
+	db, err := database.DB.DB()
+	if err != nil {
+		http.Error(w, "Failed to get DB instance", http.StatusInternalServerError)
 		return
 	}
 
-	chatID := parts[0]
-
-	if len(parts) == 1 { // Route: /api/chats/{id}
-		if r.Method == http.MethodGet {
-			a.getChat(w, r, chatID)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	} else if len(parts) == 2 && parts[1] == "messages" { // Route: /api/chats/{id}/messages
-		switch r.Method {
-		case http.MethodGet:
-			a.getChatMessages(w, r, chatID)
-		case http.MethodPost:
-			a.createChatMessage(w, r, chatID)
-		default:
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	} else {
-		http.NotFound(w, r)
+	err = db.Ping()
+	if err != nil {
+		http.Error(w, "DB ping failed", http.StatusInternalServerError)
+		return
 	}
-}
 
-func (a *App) getChats(w http.ResponseWriter, r *http.Request) {
-	// Placeholder data
-	chats := []map[string]interface{}{
-		{"id": "1", "name": "Chat 1"},
-		{"id": "2", "name": "Chat 2"},
-	}
-	respondWithJSON(w, http.StatusOK, chats)
-}
-
-func (a *App) createChat(w http.ResponseWriter, r *http.Request) {
-	respondWithJSON(w, http.StatusCreated, map[string]string{"status": "chat created"})
-}
-
-func (a *App) getChat(w http.ResponseWriter, r *http.Request, chatID string) {
-	// Placeholder data
-	chat := map[string]interface{}{"id": chatID, "name": "Chat " + chatID}
-	respondWithJSON(w, http.StatusOK, chat)
-}
-
-func (a *App) getChatMessages(w http.ResponseWriter, r *http.Request, chatID string) {
-	// Placeholder data
-	messages := []map[string]interface{}{
-		{"id": "1", "chat_id": chatID, "text": "Hello"},
-		{"id": "2", "chat_id": chatID, "text": "World"},
-	}
-	respondWithJSON(w, http.StatusOK, messages)
-}
-
-func (a *App) createChatMessage(w http.ResponseWriter, r *http.Request, chatID string) {
-	respondWithJSON(w, http.StatusCreated, map[string]string{"status": "message created"})
-}
-
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	response, _ := json.Marshal(payload)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	w.Write(response)
+	utils.RespondWithJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func main() {
@@ -143,3 +88,4 @@ func main() {
 	log.Println("Starting backend server on :8080")
 	app.Run(":8080")
 }
+
