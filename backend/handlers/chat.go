@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -10,9 +13,22 @@ import (
 	"backend/utils"
 
 	"github.com/go-chi/chi/v5"
+	socketio "github.com/doquangtan/socketio/v4"
 )
 
-func CreateChat(w http.ResponseWriter, r *http.Request) {
+// A dummy http.ResponseWriter to satisfy the interface for internal calls
+type dummyResponseWriter struct{}
+
+func (d *dummyResponseWriter) Header() http.Header        { return http.Header{} }
+func (d *dummyResponseWriter) Write([]byte) (int, error)  { return 0, nil }
+func (d *dummyResponseWriter) WriteHeader(statusCode int) {}
+
+// Handler struct holds common dependencies for handlers
+type Handler struct {
+	SocketIOServer *socketio.Server
+}
+
+func (h *Handler) CreateChat(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value("userID").(uint)
 	if !ok {
 		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
@@ -35,7 +51,7 @@ func CreateChat(w http.ResponseWriter, r *http.Request) {
 	utils.RespondWithJSON(w, http.StatusCreated, chat)
 }
 
-func GetChats(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetChats(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value("userID").(uint)
 	if !ok {
 		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
@@ -51,7 +67,7 @@ func GetChats(w http.ResponseWriter, r *http.Request) {
 	utils.RespondWithJSON(w, http.StatusOK, chats)
 }
 
-func GetChatMessages(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetChatMessages(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value("userID").(uint)
 	if !ok {
 		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
@@ -80,7 +96,7 @@ func GetChatMessages(w http.ResponseWriter, r *http.Request) {
 	utils.RespondWithJSON(w, http.StatusOK, messages)
 }
 
-func CreateChatMessage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateChatMessage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value("userID").(uint)
 	if !ok {
 		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
@@ -114,4 +130,45 @@ func CreateChatMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondWithJSON(w, http.StatusCreated, message)
+
+	// Broadcast the new message via Socket.IO
+	h.SocketIOServer.BroadcastToRoom(fmt.Sprintf("chat:%d", chatID), "message", message)
+
+	// After saving the user's message, call the LLM to get a response
+	var allMessages []models.Message
+	database.DB.Where("chat_id = ?", chatID).Order("created_at asc").Find(&allMessages)
+
+	llmRequest := struct {
+		Model    string          `json:"model"`
+		Messages []models.Message `json:"messages"`
+		Stream   bool            `json:"stream"`
+		ChatID   uint            `json:"chat_id"`
+	}{
+		Model:    "ollama/llama3", // Defaulting to an Ollama model for now
+		Messages: allMessages,
+		Stream:   false,
+		ChatID:   uint(chatID),
+	}
+
+	requestBody, err := json.Marshal(llmRequest)
+	if err != nil {
+		log.Printf("Error marshaling LLM request: %v", err)
+		return
+	}
+
+	// Create a new HTTP request to the LLM completions endpoint
+	req, err = http.NewRequest("POST", "/api/chat/completions", bytes.NewBuffer(requestBody))
+	if err != nil {
+		log.Printf("Error creating LLM request: %v", err)
+		return
+	}
+
+	// Set context with userID for authentication in the LLM handler
+	req = req.WithContext(r.Context())
+
+	// Create an LLMHandler instance and call its ChatCompletions method
+	llmHandler := LLMHandler{SocketIOServer: h.SocketIOServer}
+	llmHandler.ChatCompletions(&dummyResponseWriter{}, req)
+
+	// The LLM handler will save the message and broadcast it via Socket.IO
 }
