@@ -1,6 +1,6 @@
 # Experimental port of Open Web UI
 
-This repository contains an experimental port of [Open Web UI](https://github.com/open-web-ui/open-web-ui) backend from python to golang, using vibe coding.
+This repository contains an experimental port of [Open Web UI](https://github.com/open-webui/open-webui) backend from python to golang, using vibe coding.
 
 see [backend/IMPLEMENTATION.md](backend/IMPLEMENTATION.md) and [backend specs](backend-specs.md) for implementation details and usage instructions.
 
