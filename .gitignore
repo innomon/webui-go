@@ -5,6 +5,7 @@ node_modules/
 
 #python
 python/
+static/pyodide
 
 # SvelteKit
 .svelte-kit/
